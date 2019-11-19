@@ -1,0 +1,36 @@
+{
+  "rsync":{
+    "command":"echo",
+    "arguments":[
+      "-av",
+      "--rsh=ssh",
+      "--rsync-path=bin/rsync",
+      "{srcdir}",
+      "metarace:html/site/{dstdir}"
+    ]
+  },
+  "trackmeet":{
+    "rfid":"",
+    "maintimer":"",
+    "backuptimer":"",
+    "announce":"",
+    "tracklen_n":250,
+    "tracklen_d":1,
+    "organiser":""
+  },
+  "roadmeet":{
+    "timer":"",
+    "alttimer":"",
+    "organiser":""
+  },
+  "telegraph":{
+    "host":"",
+    "channel":"#agora",
+    "nick":"yak"
+  },
+  "sender":{
+    "protocol":"dhi",
+    "scb_linelen":32,
+    "scb_lines":8
+  }
+}
