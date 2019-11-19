@@ -1,0 +1,471 @@
+#!/usr/bin/env python
+
+# Metarace : Cycle Race Abstractions
+# Copyright (C) 2012  Nathan Fraser
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Convenience program to build stage race intermediates
+#
+# Add a file called 'stagedata.csv' to the event directory. 
+# File should contain lines as follows:
+
+#
+# id, type, descr, cat
+#
+# Where type is one of:
+#
+# laps			total laps for stage
+# sprintlaps		list of sprint laps (auto gen)
+# title			stage title
+# subtitle		stage subtitle
+# document		stage document string
+# commissaire		stage commissaire
+# organiser		stage organiser
+# date			stage date 
+# distance		stage distance if applicable
+# shortname		stage shortname
+# mirrorcmd
+# mirrorpath
+# mirrorfile		result export variables
+# crit			criterium championship
+# bon			stage bonus
+# combat		stage aggressor
+# sprint		intermediate sprint	*
+# climb			intermediate climb	**
+#
+# specials: sprints and climbs are reversed
+# because of hotspot precedence in countback on wins, and since climbs
+# are not categorised. Aggressor is a jersey only so no tally or bonus
+# plus half/full stages carry different stage finish bonus and
+# stage finish with a climb marked alternatively, but manually entered
+#
+# sisprint	intermediate sprint -> maps to cat 5 climb
+# shsprint	"hot spot" sprint -> maps to cat 1 climb
+# sclimb	intermediate climb
+# sfinclimb	climb on stage finish
+# sfullbon	full stage finish bonus
+# shalfbon	half stage finish bonus
+# saggr		aggressor by jersey only, points go to tally but ignored
+
+#
+# Other fields are ignored except for sprint and climb.
+#
+# sprint examples:
+#
+# 22, sprint, ,			for crits: 'Lap 22 sprint'
+# 44, sprint, Merbien PS,	for RR: 'm44 Merbien PS Sprint'
+# m58, sprint, M58 Crossroad, 	Manual override on id and comment
+#
+# climb examples:
+#
+# 17, climb, ,			'Lap 17 climb HC4'
+# 20, climb, Johnson St,2	m20 cat 2: 'm20 Johnson St HC2'
+# m33, climb, Jake St, 1	manual, with cat 1: 'Jake St'
+#
+import os
+import sys
+import csv
+import ConfigParser
+
+import metarace
+from metarace import strops
+from metarace import roadmeet
+from metarace import tod
+
+POINTSTYPES = {
+	'sprint':u'Sprint Classification',
+        'aggr':u'Most Aggressive Rider',
+        'points':u'Points Classification',
+        'crit':u'Criterium Classification'
+         }
+CATPTS={ 1 : [10, 6, 4],
+         2 : [7, 5, 3],
+         3 : [5, 3, 2],
+         4 : [3, 2, 1],
+         'sprint': [3, 2, 1],
+         'crit': [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+         'scody': [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+         'nrs1': [25,20,15],
+         'nrs2': [15,10,5],
+         'nrs3': [10,5,3],
+         'scstart': [2],
+         'scfin': [3],
+         'shalfbon' : [6, 4, 2],
+         'sfullbon' : [10, 6, 4],
+         'sclimb' : [6, 4, 2],
+         'bon': [10, 8, 6, 4, 2, 1],
+         'aggr':[2],
+  }
+CATBON={}
+for c in CATPTS:
+    bvec = []
+    for p in CATPTS[c]:
+        bvec.append(tod.tod(p))
+    CATBON[c] = bvec
+
+def str2vec(vecstr):
+    ret = []
+    for i in vecstr.split():
+        j = int(i)
+        ret.append(j)
+    return ret
+
+def str2bon(vecstr):
+    ret = []
+    for i in vecstr.split():
+        j = tod.str2tod(i)
+        ret.append(j)
+    return ret
+
+def main():
+    """Run the stage build application."""
+    configpath = None
+
+    # expand configpath on cmd line to realpath _before_ doing chdir
+    if len(sys.argv) > 2:
+        print('usage: stagebuild [configdir]\n')
+        sys.exit(1)
+    elif len(sys.argv) == 2:
+        rdir = sys.argv[1]
+        if not os.path.isdir(rdir):
+            rdir = os.path.dirname(rdir)
+        configpath = os.path.realpath(rdir)
+
+    sprintcount = 0
+    climbcount = 0
+    awardcount = 0
+    metarace.init()
+    app = roadmeet.roadmeet(configpath)
+    app.loadconfig()
+    if app.curevent is not None:
+        evt = app.curevent
+        print('Opened Event: ' + app.title_str)
+        stagefile = os.path.join(app.configpath, 'stagedata.csv')
+        if os.path.isfile(stagefile):
+            with open(stagefile, 'rb') as f:
+                cr = csv.reader(f)
+                for r in cr: 
+                    if len(r) < 9:
+                        print(u'Short record ignored.')
+                        continue
+                    if r[0].lower() == u'id':
+                        continue
+                    cid = r[0]
+                    ctype = r[1]
+                    cdescr = r[2]
+                    ccat = r[3]
+                    cdist = r[4]
+                    ctally = r[5]
+                    csrc = r[6]
+                    cpoints = r[7]
+                    cbonus = r[8]
+                    if ctype == u'bon':
+                        # stage bonuses
+                        thesource = u'fin'	# or override
+                        if csrc:
+                            thesource = csrc
+                        thebonus = u'10 8 6 4 2 1'
+                        if cbonus:
+                            thebonus = cbonus
+                        theid = u'bon'
+                        if cid:
+                            theid = cid
+
+                        print('Adding stage bonus...')
+                        if theid not in evt.contests:
+                            print('\tContest.')
+                            evt.contests.append(theid)
+                            evt.contestmap[theid] = {
+                                           'tally':'', 'source':thesource,
+                                           'bonuses':str2bon(thebonus),
+                                           'points':[],
+                                           'all_source':False}
+
+                    elif ctype in [u'crit']:
+                        print('Adding criterium points...')
+                        theid = u'crit'
+                        if cid:
+                            theid = cid
+                        thebonus = u''
+                        if cbonus:
+                            thebonus = cbonus
+                        thepoints = u'10 9 8 7 6 5 4 3 2 1'
+                        if cpoints:
+                            thepoints = cpoints
+                        thesource = cid
+                        if csrc:
+                            thesource = csrc
+                        thedescr = u'Criterium Points'
+                        if cdescr:
+                            thedescr = cdescr
+                        thetally = ctype
+                        if ctally:
+                            thetally = ctally
+                        tallydescr = u'Criterium Classificiation'
+                        if ctype in POINTSTYPES:
+                            tallydescr = POINTSTYPES[ctype]
+                        thedist = None
+
+                        # check for sprint tally, then add contest/int
+                        if thetally not in evt.tallys:
+                            print('\tTally.')
+                            evt.tallys.append(thetally)
+                            evt.tallymap[thetally] = {
+                                        'descr':tallydescr,
+                                        'keepdnf':False}
+                        if thesource != u'fin' and theid not in evt.intermeds:
+                            print('\tIntermediate.')
+                            evt.intermeds.append(theid)
+                            evt.intermap[theid] = {
+                                'descr':thedescr, 'places':''}
+                        if theid not in evt.contests:
+                            print('\tContest.')
+                            evt.contests.append(theid)
+                            evt.contestmap[theid] = {
+                                      'tally':thetally, 'source':thesource,
+                                      'bonuses':str2bon(thebonus),
+                                      'points':str2vec(thepoints),
+                                      'all_source':False}
+
+                    elif ctype in [u'sprint',u'aggr',u'points']:
+                        print('Adding intermediate sprint...')
+                        sprintcount += 1
+                        theid = u's' + unicode(sprintcount)
+                        if cid:
+                            theid = cid
+                        thebonus = u''
+                        if cbonus:
+                            thebonus = cbonus
+                        thepoints = u'3 2 1'
+                        if cpoints:
+                            thepoints = cpoints
+                        thesource = cid
+                        if csrc:
+                            thesource = csrc
+                        thedescr = u'Sprint ' + unicode(sprintcount)
+                        if cdescr:
+                            thedescr = cdescr
+                        thetally = ctype
+                        if ctally:
+                            thetally = ctally
+                        tallydescr = u'Points Classificiation'
+                        if ctype in POINTSTYPES:
+                            tallydescr = POINTSTYPES[ctype]
+                        thedist = None
+                        if cdist:
+                            thedist = cdist
+                        allsrc=False
+                        if thetally == u'aggr' or ctype == u'aggr':
+                            allsrc=True
+
+                        # check for sprint tally, then add contest/int
+                        if thetally not in evt.tallys:
+                            print('\tTally.')
+                            evt.tallys.append(thetally)
+                            evt.tallymap[thetally] = {
+                                        'descr':tallydescr,
+                                        'keepdnf':False}
+                        if theid not in evt.intermeds:
+                            print('\tIntermediate.')
+                            evt.intermeds.append(theid)
+                            evt.intermap[theid] = {
+                                'dist':thedist,'descr':thedescr, 'places':''}
+                            if theid not in evt.contests:
+                                print('\tContest.')
+                                evt.contests.append(theid)
+                                evt.contestmap[theid] = {
+                                          'tally':thetally, 'source':thesource,
+                                          'bonuses':str2bon(thebonus),
+                                          'points':str2vec(thepoints),
+                                          'all_source':allsrc}
+                    elif ctype in ['compet', 'combat']:
+                        print('Adding stage aggressor...')
+                        awardcount += 1
+                        theid = u'a' + unicode(awardcount)
+                        if cid:
+                            theid = cid
+                        thebonus = u''
+                        if cbonus:
+                            thebonus = cbonus
+                        thepoints = u''
+                        if cpoints:
+                            thepoints = cpoints
+                        thesource = theid
+                        if csrc:
+                            thesource = csrc
+                        thedescr = u'Stage Aggressor'
+                        if cdescr:
+                            thedescr = cdescr
+                        thedist = None
+
+                        if theid not in evt.intermeds:
+                            print('\tIntermediate.')
+                            evt.intermeds.append(theid)
+                            evt.intermap[theid] = {
+                                'descr':thedescr, 'places':''}
+                        if u'combat' not in evt.contests:
+                            print('\tContest.')
+                            evt.contests.append('combat')
+                            evt.contestmap['combat'] = {
+                                 'tally':None, 'source':thesource,
+                                          'bonuses':'',
+                                          'points':'',
+                                          'all_source':False}
+                        elif u'young' not in evt.contests:
+                            print('\tContest.')
+                            evt.contests.append('young')
+                            evt.contestmap['young'] = {
+                                 'tally':None, 'source':thesource,
+                                          'bonuses':'',
+                                          'points':'',
+                                          'all_source':False}
+                    elif ctype == 'climb':
+                        # check for climb tally, then add contest/int
+                        print('Adding hill climb...')
+                        climbcount += 1
+                        theid = u's' + unicode(climbcount)
+                        if cid:
+                            theid = cid
+                        thebonus = u''
+                        if cbonus:
+                            thebonus = cbonus
+                        thepoints = u'3 2 1'
+                        if cpoints:
+                            thepoints = cpoints
+                        thesource = cid
+                        if csrc:
+                            thesource = csrc
+                        thedescr = u'Climb ' + unicode(climbcount)
+                        if cdescr:
+                            thedescr = cdescr
+                        thetally = u'climb'
+                        if ctally:
+                            thetally = ctally
+                        thedist = None
+                        if cdist:
+                            thedist = cdist
+                        thecat = 4
+                        if ccat:
+                            thecat = int(ccat)
+
+                        if thetally not in evt.tallys:
+                            print('\tTally.')
+                            evt.tallys.append(thetally)
+                            evt.tallymap[thetally] = {
+                                    'descr':'Hill Climb Championship',
+                                    'keepdnf':False}
+
+                        if theid not in evt.intermeds:
+                                print('\tIntermediate.')
+                                evt.intermeds.append(theid)
+                                evt.intermap[theid] = {
+                                 'dist':thedist, 'descr':thedescr, 'places':''}
+                        if theid not in evt.contests:
+                                print('\tContest.')
+                                evt.contests.append(theid)
+                                evt.contestmap[theid] = {
+                                          'tally':thetally, 'source':thesource,
+                                          'bonuses':str2bon(thebonus),
+                                          'points':str2vec(thepoints),
+                                          'category':thecat,
+                                          'all_source':False}
+## event specific configs
+                    elif ctype == 'laps':
+                            evt.totlaps = strops.confopt_posint(r[2], None)
+                    elif ctype == 'minlap':
+                            evt.minlap = tod.str2tod(r[2])
+                    elif ctype == 'minelap':
+                            evt.minelap = tod.str2tod(r[2])
+                    elif ctype == 'clubmode':
+                            evt.clubmode = strops.confopt_bool(r[2])
+                    elif ctype == 'autoexport':
+                            evt.autoexport = strops.confopt_bool(r[2])
+                    elif ctype == 'startgap':
+                            evt.startgap = tod.str2tod(r[2])
+                    elif ctype == 'startdelay':
+                            evt.startdelay = tod.str2tod(r[2])
+                    elif ctype == 'timelimit':
+                            evt.timelimit = r[2]	# string
+                    elif ctype == 'precision':
+                            evt.precision = strops.confopt_posint(r[2])
+                    elif ctype == 'sloppystart':
+                            evt.sloppystart = strops.confopt_bool(r[2])
+                    elif ctype == 'passingsource':
+                            evt.passingsource = []
+                            for s in r[2].split():
+                                evt.passingsource.append(s.lower())
+                    elif ctype == 'starttrig':
+                            if r[2]:
+                                evt.starttrig = r[2]	# string
+                            else:
+                                evt.starttrig = None
+                    elif ctype == 'startloop':
+                            if r[2]:
+                                evt.startloop = r[2]	# string
+                            else:
+                                evt.startloop = None
+                    elif ctype == 'finishloop':
+                            if r[2]:
+                                evt.finishloop = r[2]	# string
+                            else:
+                                evt.finishloop = None
+                    elif ctype == 'sprintlaps':
+                            nlaps = []
+                            for j in r[2].split():
+                                k = strops.confopt_posint(j, None)
+                                if k:
+                                    nlaps.append(k)
+                            if len(nlaps) > 0:
+                                evt.sprintlaps = nlaps
+## meet metadata
+                    elif ctype == 'title':
+                            app.title_str = r[2]
+                    elif ctype == 'subtitle':     
+                            app.subtitle_str = r[2]
+                    elif ctype == 'document':     
+                            app.document_str = r[2]
+                    elif ctype == 'date':     
+                            app.date_str = r[2]
+                    elif ctype == 'organiser':     
+                            app.organiser_str = r[2]
+                    elif ctype == 'commissaire':     
+                            app.commissaire_str = r[2]
+                    elif ctype == 'distance':     
+                            app.distance = strops.confopt_float(r[2])
+                    elif ctype == 'uscbchan':
+                            app.uscbchan = r[2]
+                    elif ctype == 'timer':
+                            app.timer_port = r[2]
+                    elif ctype == 'remoteenable':
+                            app.remote_enable = strops.confopt_bool(r[2])
+                    elif ctype == 'mirrorcmd':
+                            app.mirrorcmd = r[2]
+                    elif ctype == 'mirrorpath':
+                            app.mirrorpath = r[2]
+                    elif ctype == 'mirrorfile':
+                            app.mirrorfile = r[2]
+                    elif ctype == 'shortname':     
+                            app.shortname = r[2]
+                    elif ctype == 'etype':
+                            evh = app.edb.getfirst()
+                            evh[u'type'] = r[2]
+            print('Saving event data.')
+            app.saveconfig()
+        else:
+            print ('No stage data to load.')
+    #app.shutdown()
+
+if __name__ == '__main__':
+    main()
