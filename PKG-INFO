@@ -1,0 +1,32 @@
+Metadata-Version: 1.1
+Name: metarace
+Version: 1.11.0
+Summary: Cycle race abstractions
+Home-page: http://metarace.com.au/_about/software
+Author: Nathan Fraser
+Author-email: ndf@metarace.com.au
+License: GNU GPL Version 3
+Description: 
+        A collection of utilities that support timing and result preparation
+        for track and road cycle races.
+        
+Platform: UNKNOWN
+Classifier: Development Status :: 3 - Alpha
+Classifier: Environment :: X11 Applications :: GTK
+Classifier: Intended Audience :: Other Audience
+Classifier: License :: OSI Approved :: GNU General Public License (GPL)
+Classifier: Natural Language :: English
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 2.6
+Classifier: Topic :: Other/Nonlisted Topic
+Requires: pygtk
+Requires: gtk
+Requires: glib
+Requires: gobject
+Requires: xlwt
+Requires: serial
+Requires: rsvg
+Requires: cairo
+Requires: pango
+Requires: pangocairo
+Provides: metarace
